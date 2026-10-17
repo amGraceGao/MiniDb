@@ -265,21 +265,56 @@ class MiniDB:
 # db.rollback()
 # print(db.get("name"))
 
-db = MiniDB("data.log")
+# db = MiniDB("data.log")
+# db.put("name", "Alice")
+# db.put("city", "Beijing")
+
+# db.begin()
+# db.put("name", "Bob")
+# db.delete("city")
+# db.commit()
+
+# assert db.get("name") == "Bob"
+# assert db.get("city") is None
+
+# # 验证重新打开后，提交结果仍然存在
+# reopened = MiniDB("data.log")
+# assert reopened.get("name") == "Bob"
+# assert reopened.get("city") is None
+
+# print("Commit checks passed!")
+
+# 使用独立的测试文件，每次测试都从空文件开始
+test_path = "transaction_test.log"
+with open(test_path, "wb"):
+    pass
+
+db = MiniDB(test_path)
 db.put("name", "Alice")
 db.put("city", "Beijing")
 
+# 模拟只写入了一部分 Batch record
+with open(test_path, "ab") as file:
+    file.write(
+        b'{"op":"batch","records":['
+        b'{"key":"name","value":"Bob"},'
+    )
+
+# 重新打开：半条 Batch 应该被丢弃
+db = MiniDB(test_path)
+
+assert db.get("name") == "Alice"
+assert db.get("city") == "Beijing"
+
+# 确认恢复之后，仍能正常提交事务
 db.begin()
-db.put("name", "Bob")
+db.put("name", "Charlie")
 db.delete("city")
 db.commit()
 
-assert db.get("name") == "Bob"
+db = MiniDB(test_path)
+
+assert db.get("name") == "Charlie"
 assert db.get("city") is None
 
-# 验证重新打开后，提交结果仍然存在
-reopened = MiniDB("data.log")
-assert reopened.get("name") == "Bob"
-assert reopened.get("city") is None
-
-print("Commit checks passed!")
+print("Transaction recovery checks passed!")
