@@ -14,12 +14,41 @@ class MiniDB:
 
         self.pending = []
 
+        
+
     def rollback(self):
         if self.pending is None:
             raise RuntimeError("No active transaction")
 
         self.pending = None
 
+    def commit(self):
+        if self.pending is None:
+            raise RuntimeError("No active transaction")
+
+        if not self.pending:
+            self.pending = None
+            return
+        
+        batch = {"op" : "batch", "records" : self.pending}
+        text = json.dumps(batch, ensure_ascii=False)
+                
+        with open(self.path, "ab") as file:
+            offset = file.tell()
+            file.write((text + "\n").encode("utf-8"))
+            file.flush()
+            os.fsync(file.fileno())
+
+        for record in self.pending:
+            key = record["key"]
+
+            if record.get("deleted", False):
+                self.index.pop(key, None)
+            else:
+                self.index[key] = offset
+
+        self.pending = None
+        
     def put(self, key, value):
         # 1. Serialize record
         # 2. Append to log
@@ -81,6 +110,14 @@ class MiniDB:
             line  = file.readline()
             record = json.loads(line)
 
+        #return record["value"]
+        if record.get("op") == "batch":
+            for item in reversed(record["records"]):
+                if item["key"] == key:
+                    return item.get("value")
+
+            raise RuntimeError("Index points to the wrong batch")
+
         return record["value"]
 
         #pass
@@ -124,12 +161,26 @@ class MiniDB:
                     os.fsync(file.fileno())
                     break
                 
+                # record = json.loads(line)
+                # #self.index[record["key"]] = offset
+                # if record.get("deleted", False):
+                #     self.index.pop(record["key"], None)
+                # else:
+                #     self.index[record["key"]] = offset
+
                 record = json.loads(line)
-                #self.index[record["key"]] = offset
-                if record.get("deleted", False):
-                    self.index.pop(record["key"], None)
+                if record.get("op") == "batch":
+                    records = record["records"]
                 else:
-                    self.index[record["key"]] = offset
+                    records = [record]
+
+                for item in records:
+                    key = item["key"]
+
+                    if item.get("deleted", False):
+                        self.index.pop(key, None)
+                    else:
+                        self.index[key] = offset
         #pass
 
 # db = MiniDB("data.log")
@@ -193,23 +244,42 @@ class MiniDB:
 # assert db.get("name") == "Bob"
 
 # print("Recovery checks passed!")
+# db = MiniDB("data.log")
+# db.put("name", "Alice")
+
+# db.begin()
+
+# db.delete("name")
+# print(db.get("name"))
+
+# db.put("name", "Bob")
+
+# #db.put("name", "Charlie")
+
+# print(db.get("name"))
+
+# db.delete("name")
+# print(db.get("name"))
+# print(db.pending)
+
+# db.rollback()
+# print(db.get("name"))
+
 db = MiniDB("data.log")
 db.put("name", "Alice")
+db.put("city", "Beijing")
 
 db.begin()
-
-db.delete("name")
-print(db.get("name"))
-
 db.put("name", "Bob")
+db.delete("city")
+db.commit()
 
-#db.put("name", "Charlie")
+assert db.get("name") == "Bob"
+assert db.get("city") is None
 
-print(db.get("name"))
+# 验证重新打开后，提交结果仍然存在
+reopened = MiniDB("data.log")
+assert reopened.get("name") == "Bob"
+assert reopened.get("city") is None
 
-db.delete("name")
-print(db.get("name"))
-print(db.pending)
-
-db.rollback()
-print(db.get("name"))
+print("Commit checks passed!")
