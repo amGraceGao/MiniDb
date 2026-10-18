@@ -183,138 +183,143 @@ class MiniDB:
                         self.index[key] = offset
         #pass
 
-# db = MiniDB("data.log")
-# #print(db.path)
-# #print(db.index)
+if __name__ == "__main__":
+    test_path = "transation_test_log"
 
-# #with open(db.path, "a", encoding="utf-8") as file:
-# #  file.write("hello\n")
+    with open(test_path, "wb"):
+        pass
 
-# #db.put("name", "Alice")
-# #db.put("name", "Bob")
-# #db.put("city", "Beijing")
+    db = MiniDB(test_path)
 
-# db.put("name", "Charlie")
-# print(db.index)
-# print(db.get("name"))
+    db.put("name", "Alice")
+    db.put("city", "Beijing")
 
-# db.delete("name")
-# print(db.get("name"))
+    # 模拟只写入了一部分 Batch record
+    with open(test_path, "ab") as file:
+        file.write(
+            b'{"op":"batch","records":['
+            b'{"key":"name","value":"Bob"},'
+        )
 
-# db = MiniDB("data.log")
-# print(db.get("name"))
-# print(db.get("missing"))
+    # 重新打开：半条 Batch 应该被丢弃
+    db = MiniDB(test_path)
 
-# db = MiniDB("data.log")
+    assert db.get("name") == "Alice"
+    assert db.get("city") == "Beijing"
 
-# # 重复写入：最新值生效
-# db.put("user:1", "Alice")
-# db.put("user:1", "Bob")
-# assert db.get("user:1") == "Bob"
+    # 确认恢复之后，仍能正常提交事务
+    db.begin()
+    db.put("name", "Charlie")
+    db.delete("city")
+    db.commit()
 
-# # 删除
-# db.put("user:2", "Charlie")
-# db.delete("user:2")
-# assert db.get("user:2") is None
+    db = MiniDB(test_path)
 
-# # 重新打开：从日志重建 index
-# reopened = MiniDB("data.log")
-# assert reopened.get("user:1") == "Bob"
-# assert reopened.get("user:2") is None
+    assert db.get("name") == "Charlie"
+    assert db.get("city") is None
 
-# print("All checks passed!")
+    print("Transaction recovery checks passed!")
 
-# 测试首次启动：运行前确保这个文件不存在
-# db = MiniDB("recovery_test.log")
-# assert db.get("name") is None
+    # db = MiniDB("data.log")
+    # #print(db.path)
+    # #print(db.index)
 
-# db.put("name", "Alice")
+    # #with open(db.path, "a", encoding="utf-8") as file:
+    # #  file.write("hello\n")
 
-# # 模拟崩溃留下半条记录
-# with open("recovery_test.log", "ab") as file:
-#     file.write(b'{"key": "name", "value": ')
+    # #db.put("name", "Alice")
+    # #db.put("name", "Bob")
+    # #db.put("city", "Beijing")
 
-# # 重新打开，应该保留之前的完整记录
-# db = MiniDB("recovery_test.log")
-# assert db.get("name") == "Alice"
+    # db.put("name", "Charlie")
+    # print(db.index)
+    # print(db.get("name"))
 
-# # 确认清理尾部后，还能正常写入和恢复
-# db.put("name", "Bob")
-# db = MiniDB("recovery_test.log")
-# assert db.get("name") == "Bob"
+    # db.delete("name")
+    # print(db.get("name"))
 
-# print("Recovery checks passed!")
-# db = MiniDB("data.log")
-# db.put("name", "Alice")
+    # db = MiniDB("data.log")
+    # print(db.get("name"))
+    # print(db.get("missing"))
 
-# db.begin()
+    # db = MiniDB("data.log")
 
-# db.delete("name")
-# print(db.get("name"))
+    # # 重复写入：最新值生效
+    # db.put("user:1", "Alice")
+    # db.put("user:1", "Bob")
+    # assert db.get("user:1") == "Bob"
 
-# db.put("name", "Bob")
+    # # 删除
+    # db.put("user:2", "Charlie")
+    # db.delete("user:2")
+    # assert db.get("user:2") is None
 
-# #db.put("name", "Charlie")
+    # # 重新打开：从日志重建 index
+    # reopened = MiniDB("data.log")
+    # assert reopened.get("user:1") == "Bob"
+    # assert reopened.get("user:2") is None
 
-# print(db.get("name"))
+    # print("All checks passed!")
 
-# db.delete("name")
-# print(db.get("name"))
-# print(db.pending)
+    # 测试首次启动：运行前确保这个文件不存在
+    # db = MiniDB("recovery_test.log")
+    # assert db.get("name") is None
 
-# db.rollback()
-# print(db.get("name"))
+    # db.put("name", "Alice")
 
-# db = MiniDB("data.log")
-# db.put("name", "Alice")
-# db.put("city", "Beijing")
+    # # 模拟崩溃留下半条记录
+    # with open("recovery_test.log", "ab") as file:
+    #     file.write(b'{"key": "name", "value": ')
 
-# db.begin()
-# db.put("name", "Bob")
-# db.delete("city")
-# db.commit()
+    # # 重新打开，应该保留之前的完整记录
+    # db = MiniDB("recovery_test.log")
+    # assert db.get("name") == "Alice"
 
-# assert db.get("name") == "Bob"
-# assert db.get("city") is None
+    # # 确认清理尾部后，还能正常写入和恢复
+    # db.put("name", "Bob")
+    # db = MiniDB("recovery_test.log")
+    # assert db.get("name") == "Bob"
 
-# # 验证重新打开后，提交结果仍然存在
-# reopened = MiniDB("data.log")
-# assert reopened.get("name") == "Bob"
-# assert reopened.get("city") is None
+    # print("Recovery checks passed!")
+    # db = MiniDB("data.log")
+    # db.put("name", "Alice")
 
-# print("Commit checks passed!")
+    # db.begin()
 
-# 使用独立的测试文件，每次测试都从空文件开始
-test_path = "transaction_test.log"
-with open(test_path, "wb"):
-    pass
+    # db.delete("name")
+    # print(db.get("name"))
 
-db = MiniDB(test_path)
-db.put("name", "Alice")
-db.put("city", "Beijing")
+    # db.put("name", "Bob")
 
-# 模拟只写入了一部分 Batch record
-with open(test_path, "ab") as file:
-    file.write(
-        b'{"op":"batch","records":['
-        b'{"key":"name","value":"Bob"},'
-    )
+    # #db.put("name", "Charlie")
 
-# 重新打开：半条 Batch 应该被丢弃
-db = MiniDB(test_path)
+    # print(db.get("name"))
 
-assert db.get("name") == "Alice"
-assert db.get("city") == "Beijing"
+    # db.delete("name")
+    # print(db.get("name"))
+    # print(db.pending)
 
-# 确认恢复之后，仍能正常提交事务
-db.begin()
-db.put("name", "Charlie")
-db.delete("city")
-db.commit()
+    # db.rollback()
+    # print(db.get("name"))
 
-db = MiniDB(test_path)
+    # db = MiniDB("data.log")
+    # db.put("name", "Alice")
+    # db.put("city", "Beijing")
 
-assert db.get("name") == "Charlie"
-assert db.get("city") is None
+    # db.begin()
+    # db.put("name", "Bob")
+    # db.delete("city")
+    # db.commit()
 
-print("Transaction recovery checks passed!")
+    # assert db.get("name") == "Bob"
+    # assert db.get("city") is None
+
+    # # 验证重新打开后，提交结果仍然存在
+    # reopened = MiniDB("data.log")
+    # assert reopened.get("name") == "Bob"
+    # assert reopened.get("city") is None
+
+    # print("Commit checks passed!")
+
+    # 使用独立的测试文件，每次测试都从空文件开始
+    
