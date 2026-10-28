@@ -2,12 +2,14 @@ import json
 import os
 import struct
 import zlib
+import uuid
 
 class MiniDB:
     def __init__(self, path):
         self.path = path
         self.index = {}
         self.pending = None
+        self.transaction_id = None
         self._recover()
 
     def begin(self):
@@ -15,7 +17,7 @@ class MiniDB:
             raise RuntimeError("A transaction is already active")
 
         self.pending = []
-
+        self.transaction_id = uuid.uuid4().hex
         
 
     def rollback(self):
@@ -23,6 +25,7 @@ class MiniDB:
             raise RuntimeError("No active transaction")
 
         self.pending = None
+        self.transaction_id = None
 
     def commit(self):
         if self.pending is None:
@@ -30,6 +33,7 @@ class MiniDB:
 
         if not self.pending:
             self.pending = None
+            self.transaction_id = None
             return
         
         batch = {"op" : "batch", "records" : self.pending}
@@ -50,6 +54,7 @@ class MiniDB:
                 self.index[key] = offset
 
         self.pending = None
+        self.transaction_id = None
 
     def _encode_record(self, record):
         payload = json.dumps(
@@ -251,6 +256,16 @@ if __name__ == "__main__":
 
     print(reopened.get("name"))
     print(reopened.get("city"))
+
+    db = MiniDB("framed_recovery_test.log")
+
+    print(db.transaction_id)  # None
+
+    db.begin()
+    print(db.transaction_id)  # 一串随机 ID
+
+    db.rollback()
+    print(db.transaction_id)  # None
 
     # db.put("name", "Alice")
     # print(db.get("name"))
