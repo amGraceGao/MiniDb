@@ -1,5 +1,7 @@
 import json
 import os
+import struct
+import zlib
 
 class MiniDB:
     def __init__(self, path):
@@ -48,6 +50,39 @@ class MiniDB:
                 self.index[key] = offset
 
         self.pending = None
+
+    def _encode_record(self, record):
+        payload = json.dumps(
+            record, ensure_ascii=False
+        ).encode("utf-8")
+
+        length = len(payload)
+        checksum = zlib.crc32(payload)
+
+        header = struct.pack(">II", length, checksum)
+
+        return header + payload
+
+    def _read_frame(self, file):
+        offset = file.tell()
+        header = file.read(8)
+
+        if header == b"":
+            return None
+
+        length, expected_checksum = struct.unpack(">II", header)
+
+        payload = file.read(length)
+
+        if len(payload) != length:
+            raise EOFError("Incomplete frame payload")
+
+        actual_checksum = zlib.crc32(payload)
+
+        if actual_checksum != expected_checksum:
+            raise ValueError("Checksum mismatch")
+
+        return offset, json.loads(payload)
         
     def put(self, key, value):
         # 1. Serialize record
@@ -68,11 +103,12 @@ class MiniDB:
             })
             return
         record = {"key" : key, "value" : value}
-        text = json.dumps(record, ensure_ascii=False)
+        #text = json.dumps(record, ensure_ascii=False)
+        frame = self._encode_record(record)
 
         with open(self.path, "ab") as file:
             offset = file.tell()
-            file.write((text + "\n").encode("utf-8"))
+            file.write(frame)
             file.flush()
             os.fsync(file.fileno())
 
@@ -107,9 +143,9 @@ class MiniDB:
 
         with open(self.path, "rb") as file:
             file.seek(offset)
-            line  = file.readline()
-            record = json.loads(line)
-
+            #line  = file.readline()
+            #record = json.loads(line)
+            _, record = self._read_frame(file)
         #return record["value"]
         if record.get("op") == "batch":
             for item in reversed(record["records"]):
@@ -131,10 +167,11 @@ class MiniDB:
             })
             return
         record = {"key" : key, "deleted" : True}
-        text = json.dumps(record, ensure_ascii=False)
+        #text = json.dumps(record, ensure_ascii=False)
+        frame = self._encode_record(record)
 
         with open(self.path, "ab") as file:
-            file.write((text + "\n").encode("utf-8"))
+            file.write(frame)
             file.flush()
             os.fsync(file.fileno())
 
@@ -150,25 +187,39 @@ class MiniDB:
 
             while True:
                 offset = file.tell()
-                line = file.readline()
 
-                if not line:
-                    break
-
-                if not line.endswith(b"\n"):
+                try:
+                    result = self._read_frame(file)
+                except EOFError:
+                    # 最后一条 Frame 没写完整：删除它
                     file.truncate(offset)
                     file.flush()
                     os.fsync(file.fileno())
                     break
-                
-                # record = json.loads(line)
-                # #self.index[record["key"]] = offset
-                # if record.get("deleted", False):
-                #     self.index.pop(record["key"], None)
-                # else:
-                #     self.index[record["key"]] = offset
 
-                record = json.loads(line)
+                if result is None:
+                    break
+
+                _, record = result
+                # line = file.readline()
+
+                # if not line:
+                #     break
+
+                # if not line.endswith(b"\n"):
+                #     file.truncate(offset)
+                #     file.flush()
+                #     os.fsync(file.fileno())
+                #     break
+                
+                # # record = json.loads(line)
+                # # #self.index[record["key"]] = offset
+                # # if record.get("deleted", False):
+                # #     self.index.pop(record["key"], None)
+                # # else:
+                # #     self.index[record["key"]] = offset
+
+                # record = json.loads(line)
                 if record.get("op") == "batch":
                     records = record["records"]
                 else:
@@ -192,33 +243,63 @@ if __name__ == "__main__":
     db = MiniDB(test_path)
 
     db.put("name", "Alice")
-    db.put("city", "Beijing")
-
-    # 模拟只写入了一部分 Batch record
-    with open(test_path, "ab") as file:
-        file.write(
-            b'{"op":"batch","records":['
-            b'{"key":"name","value":"Bob"},'
-        )
-
-    # 重新打开：半条 Batch 应该被丢弃
-    db = MiniDB(test_path)
-
-    assert db.get("name") == "Alice"
-    assert db.get("city") == "Beijing"
-
-    # 确认恢复之后，仍能正常提交事务
-    db.begin()
-    db.put("name", "Charlie")
+    db.put("city", "Boston")
     db.delete("city")
-    db.commit()
 
-    db = MiniDB(test_path)
+    # 创建新对象，模拟程序重启
+    reopened = MiniDB(test_path)
 
-    assert db.get("name") == "Charlie"
-    assert db.get("city") is None
+    print(reopened.get("name"))
+    print(reopened.get("city"))
 
-    print("Transaction recovery checks passed!")
+    # db.put("name", "Alice")
+    # print(db.get("name"))
+
+    # db.delete("name")
+    # print(db.get("name"))
+    # db.put("name", "Alice")
+    # db.put("city", "Boston")
+
+    # print(db.get("name"))
+    # print(db.get("city"))
+    # print(db.get("missing"))
+
+    # print(db.index)
+    # print(os.path.getsize(test_path))
+
+    # with open(test_path, "wb"):
+    #     pass
+
+    # db = MiniDB(test_path)
+
+    # db.put("name", "Alice")
+    # db.put("city", "Beijing")
+
+    # # 模拟只写入了一部分 Batch record
+    # with open(test_path, "ab") as file:
+    #     file.write(
+    #         b'{"op":"batch","records":['
+    #         b'{"key":"name","value":"Bob"},'
+    #     )
+
+    # # 重新打开：半条 Batch 应该被丢弃
+    # db = MiniDB(test_path)
+
+    # assert db.get("name") == "Alice"
+    # assert db.get("city") == "Beijing"
+
+    # # 确认恢复之后，仍能正常提交事务
+    # db.begin()
+    # db.put("name", "Charlie")
+    # db.delete("city")
+    # db.commit()
+
+    # db = MiniDB(test_path)
+
+    # assert db.get("name") == "Charlie"
+    # assert db.get("city") is None
+
+    # print("Transaction recovery checks passed!")
 
     # db = MiniDB("data.log")
     # #print(db.path)
@@ -322,4 +403,26 @@ if __name__ == "__main__":
     # print("Commit checks passed!")
 
     # 使用独立的测试文件，每次测试都从空文件开始
-    
+    # db = MiniDB("data.log")
+
+    # record = {"key": "name", "value": "Alice"}
+    # frame = db._encode_record(record)
+
+    # print("Header:", frame[:8])
+    # print("Payload:", frame[8:].decode("utf-8"))
+    # print("Total bytes:", len(frame))
+
+    # db = MiniDB("data.log")
+
+    # record = {"key": "name", "value": "Alice"}
+    # frame = db._encode_record(record)
+
+    # with open("frame_test.log", "wb") as file:
+    #     file.write(frame)
+
+    # with open("frame_test.log", "rb") as file:
+    #     offset, decoded = db._read_frame(file)
+
+    #     print(offset)
+    #     print(decoded)
+    #     print(db._read_frame(file))
