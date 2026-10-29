@@ -36,22 +36,51 @@ class MiniDB:
             self.transaction_id = None
             return
         
-        batch = {"op" : "batch", "records" : self.pending}
-        text = json.dumps(batch, ensure_ascii=False)
-                
+        #batch = {"op" : "batch", "records" : self.pending}
+        #text = json.dumps(batch, ensure_ascii=False)
+
+        written_records = []
+
         with open(self.path, "ab") as file:
-            offset = file.tell()
-            file.write((text + "\n").encode("utf-8"))
+            # 先写入所有操作记录
+            for record in self.pending:
+                offset = file.tell()
+                frame = self._encode_record(record)
+
+                file.write(frame)
+                written_records.append((record, offset))
+            # offset = file.tell()
+            # file.write((text + "\n").encode("utf-8"))
+            # file.flush()
+            # os.fsync(file.fileno())
+
+            # 最后才写 COMMIT marker
+            commit_record = {
+                "op" : "commit",
+                "txid" : self.transaction_id,
+            }
+            file.write(self._encode_record(commit_record))
+
+            # 只有操作和 COMMIT 都写完，才同步到磁盘
             file.flush()
             os.fsync(file.fileno())
 
-        for record in self.pending:
+        # fsync 成功后，更新内存 index
+        for record, offset in written_records:
             key = record["key"]
 
             if record.get("deleted", False):
                 self.index.pop(key, None)
             else:
                 self.index[key] = offset
+
+        # for record in self.pending:
+        #     key = record["key"]
+
+        #     if record.get("deleted", False):
+        #         self.index.pop(key, None)
+        #     else:
+        #         self.index[key] = offset
 
         self.pending = None
         self.transaction_id = None
@@ -103,6 +132,8 @@ class MiniDB:
 
         if self.pending is not None:
             self.pending.append({
+                "op" : "put",
+                "txid" : self.transaction_id,
                 "key": key,
                 "value": value,
             })
@@ -167,6 +198,8 @@ class MiniDB:
         # Append tombstone record
         if self.pending is not None:
             self.pending.append({
+                "op" : "delete",
+                "txid" : self.transaction_id,
                 "key" : key,
                 "deleted" : True
             })
@@ -247,25 +280,37 @@ if __name__ == "__main__":
 
     db = MiniDB(test_path)
 
+    db.begin()
     db.put("name", "Alice")
     db.put("city", "Boston")
-    db.delete("city")
+    db.commit()
+    #db.delete("city")
 
-    # 创建新对象，模拟程序重启
-    reopened = MiniDB(test_path)
+    #print(db.pending)
 
-    print(reopened.get("name"))
-    print(reopened.get("city"))
+    #db.rollback()
+    print(db.get("name"))
+    print(db.get("city"))
 
-    db = MiniDB("framed_recovery_test.log")
+    # db.put("name", "Alice")
+    # db.put("city", "Boston")
+    # db.delete("city")
 
-    print(db.transaction_id)  # None
+    # # 创建新对象，模拟程序重启
+    # reopened = MiniDB(test_path)
 
-    db.begin()
-    print(db.transaction_id)  # 一串随机 ID
+    # print(reopened.get("name"))
+    # print(reopened.get("city"))
 
-    db.rollback()
-    print(db.transaction_id)  # None
+    # db = MiniDB("framed_recovery_test.log")
+
+    # print(db.transaction_id)  # None
+
+    # db.begin()
+    # print(db.transaction_id)  # 一串随机 ID
+
+    # db.rollback()
+    # print(db.transaction_id)  # None
 
     # db.put("name", "Alice")
     # print(db.get("name"))
