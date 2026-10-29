@@ -104,6 +104,9 @@ class MiniDB:
         if header == b"":
             return None
 
+        if len(header) != 8:
+            raise EOFError("Incomplete frame header")
+
         length, expected_checksum = struct.unpack(">II", header)
 
         payload = file.read(length)
@@ -328,36 +331,76 @@ if __name__ == "__main__":
         pass
 
     db = MiniDB(test_path)
-
-     # 写入一条已提交的数据
-    db = MiniDB(test_path)
-
-    # 写入一条正常的 framed record
-    db = MiniDB(test_path)
     db.put("name", "Alice")
 
-    # Header 是前 8 bytes。
-    # 从 payload 的第一个 byte 开始，故意修改一个 bit。
-    with open(test_path, "r+b") as file:
-        file.seek(8)
+    # 模拟 transaction operation 已完整写入
+    txid = uuid.uuid4().hex
+    operation = {
+        "op": "put",
+        "txid": txid,
+        "key": "name",
+        "value": "Bob",
+    }
+    commit_marker = {
+        "op": "commit",
+        "txid": txid,
+    }
 
-        original_byte = file.read(1)
-        corrupted_byte = bytes([original_byte[0] ^ 1])
+    operation_frame = db._encode_record(operation)
+    commit_frame = db._encode_record(commit_marker)
 
-        file.seek(8)
-        file.write(corrupted_byte)
+    with open(test_path, "ab") as file:
+        file.write(operation_frame)
 
-        file.flush()
-        os.fsync(file.fileno())
+        # COMMIT Frame 只写入前 4 bytes，模拟崩溃
+        file.write(commit_frame[:4])
 
-    # 重启时，checksum 应该发现内容和原记录不一致
-    try:
-        MiniDB(test_path)
-    except ValueError as error:
-        assert str(error) == "Checksum mismatch"
-        print("Checksum validation checks passed!")
-    else:
-        raise AssertionError("Expected a checksum mismatch")
+    # 重启：Bob 的 operation 没有完整 COMMIT，因此不能生效
+    reopened = MiniDB(test_path)
+
+    assert reopened.get("name") == "Alice"
+
+    # 恢复后仍可提交新的 transaction
+    reopened.begin()
+    reopened.put("name", "Charlie")
+    reopened.commit()
+
+    reopened_again = MiniDB(test_path)
+    assert reopened_again.get("name") == "Charlie"
+
+    print("Incomplete-COMMIT recovery checks passed!")
+    
+    # db = MiniDB(test_path)
+
+    #  # 写入一条已提交的数据
+    # db = MiniDB(test_path)
+
+    # # 写入一条正常的 framed record
+    # db = MiniDB(test_path)
+    # db.put("name", "Alice")
+
+    # # Header 是前 8 bytes。
+    # # 从 payload 的第一个 byte 开始，故意修改一个 bit。
+    # with open(test_path, "r+b") as file:
+    #     file.seek(8)
+
+    #     original_byte = file.read(1)
+    #     corrupted_byte = bytes([original_byte[0] ^ 1])
+
+    #     file.seek(8)
+    #     file.write(corrupted_byte)
+
+    #     file.flush()
+    #     os.fsync(file.fileno())
+
+    # # 重启时，checksum 应该发现内容和原记录不一致
+    # try:
+    #     MiniDB(test_path)
+    # except ValueError as error:
+    #     assert str(error) == "Checksum mismatch"
+    #     print("Checksum validation checks passed!")
+    # else:
+    #     raise AssertionError("Expected a checksum mismatch")
 
 
     # db.begin()
