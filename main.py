@@ -332,37 +332,65 @@ if __name__ == "__main__":
      # 写入一条已提交的数据
     db = MiniDB(test_path)
 
-    db.begin()
+    # 写入一条正常的 framed record
+    db = MiniDB(test_path)
     db.put("name", "Alice")
-    db.commit()
 
-    # 构造一条新的 operation Frame，但只写入前 12 bytes
-    # 这包含完整 header 的 8 bytes，加上一小部分 payload
-    unfinished_operation = {
-        "op": "put",
-        "txid": uuid.uuid4().hex,
-        "key": "name",
-        "value": "Bob",
-    }
-    incomplete_frame = db._encode_record(unfinished_operation)
+    # Header 是前 8 bytes。
+    # 从 payload 的第一个 byte 开始，故意修改一个 bit。
+    with open(test_path, "r+b") as file:
+        file.seek(8)
 
-    with open(test_path, "ab") as file:
-        file.write(incomplete_frame[:12])
+        original_byte = file.read(1)
+        corrupted_byte = bytes([original_byte[0] ^ 1])
 
-    # 模拟重启；_recover() 应截断不完整 Frame
-    reopened = MiniDB(test_path)
+        file.seek(8)
+        file.write(corrupted_byte)
 
-    assert reopened.get("name") == "Alice"
+        file.flush()
+        os.fsync(file.fileno())
 
-    # 验证截断后仍可正常提交和恢复
-    reopened.begin()
-    reopened.put("name", "Charlie")
-    reopened.commit()
+    # 重启时，checksum 应该发现内容和原记录不一致
+    try:
+        MiniDB(test_path)
+    except ValueError as error:
+        assert str(error) == "Checksum mismatch"
+        print("Checksum validation checks passed!")
+    else:
+        raise AssertionError("Expected a checksum mismatch")
 
-    reopened_again = MiniDB(test_path)
-    assert reopened_again.get("name") == "Charlie"
 
-    print("Incomplete-frame recovery checks passed!")
+    # db.begin()
+    # db.put("name", "Alice")
+    # db.commit()
+
+    # # 构造一条新的 operation Frame，但只写入前 12 bytes
+    # # 这包含完整 header 的 8 bytes，加上一小部分 payload
+    # unfinished_operation = {
+    #     "op": "put",
+    #     "txid": uuid.uuid4().hex,
+    #     "key": "name",
+    #     "value": "Bob",
+    # }
+    # incomplete_frame = db._encode_record(unfinished_operation)
+
+    # with open(test_path, "ab") as file:
+    #     file.write(incomplete_frame[:12])
+
+    # # 模拟重启；_recover() 应截断不完整 Frame
+    # reopened = MiniDB(test_path)
+
+    # assert reopened.get("name") == "Alice"
+
+    # # 验证截断后仍可正常提交和恢复
+    # reopened.begin()
+    # reopened.put("name", "Charlie")
+    # reopened.commit()
+
+    # reopened_again = MiniDB(test_path)
+    # assert reopened_again.get("name") == "Charlie"
+
+    # print("Incomplete-frame recovery checks passed!")
 
     # db.begin()
     # db.put("name", "Alice")
