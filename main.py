@@ -218,8 +218,22 @@ class MiniDB:
 
     def _recover(self):
         self.index.clear()
+
+         # 暂存尚未提交的事务操作：
+        # txid → [(record, offset), ...]
+        pending_transactions = {}
+
         # Replay valid committed records
         #with open(self.path, "r", encoding="utf-8") as file:
+
+        def apply_record(record, offset):
+            key = record["key"]
+
+            if record.get("deleted", False):
+                self.index.pop(key, None)
+            else:
+                self.index[key] = offset
+
         with open(self.path, "a+b") as file:
             file.seek(0)
 
@@ -258,19 +272,54 @@ class MiniDB:
                 # #     self.index[record["key"]] = offset
 
                 # record = json.loads(line)
-                if record.get("op") == "batch":
-                    records = record["records"]
+                
+                
+                # if record.get("op") == "batch":
+                #     records = record["records"]
+                # else:
+                #     records = [record]
+
+                # for item in records:
+                #     key = item["key"]
+
+                #     if item.get("deleted", False):
+                #         self.index.pop(key, None)
+                #     else:
+                #         self.index[key] = offset
+                
+                _, record = result
+                operation = record.get("op")
+
+                # 事务中的 put/delete：先暂存，不能立刻应用
+                if operation in ("put", "delete") and "txid" in record:
+                    txid = record["txid"]
+
+                    if txid not in pending_transactions:
+                        pending_transactions[txid] = []
+
+                    pending_transactions[txid].append((record, offset))
+
+                # 看到 COMMIT 后，才应用该事务的所有操作
+                elif operation == "commit":
+                    txid = record["txid"]
+
+                    if txid not in pending_transactions:
+                        raise ValueError("COMMIT without transaction operations")
+
+                    for transaction_record, transaction_offset in pending_transactions[txid]:
+                        apply_record(transaction_record, transaction_offset)
+
+                    del pending_transactions[txid]
+
+                # 兼容之前的 batch 格式
+                elif operation == "batch":
+                    for item in record["records"]:
+                        apply_record(item, offset)
+
+                # 普通的、非事务 put/delete 记录
                 else:
-                    records = [record]
+                    apply_record(record, offset)
 
-                for item in records:
-                    key = item["key"]
-
-                    if item.get("deleted", False):
-                        self.index.pop(key, None)
-                    else:
-                        self.index[key] = offset
-        #pass
 
 if __name__ == "__main__":
     test_path = "transation_test_log"
@@ -282,15 +331,37 @@ if __name__ == "__main__":
 
     db.begin()
     db.put("name", "Alice")
-    db.put("city", "Boston")
     db.commit()
-    #db.delete("city")
 
-    #print(db.pending)
+    # 模拟崩溃前已经写入操作，但还没写 COMMIT
+    unfinished_txid = uuid.uuid4().hex
+    unfinished_operation = {
+        "op": "put",
+        "txid": unfinished_txid,
+        "key": "name",
+        "value": "Bob",
+    }
 
-    #db.rollback()
-    print(db.get("name"))
-    print(db.get("city"))
+    with open(test_path, "ab") as file:
+        file.write(db._encode_record(unfinished_operation))
+
+    # 模拟重启
+    reopened = MiniDB(test_path)
+
+    assert reopened.get("name") == "Alice"
+    print("Transaction recovery checks passed!")
+
+    # db.begin()
+    # db.put("name", "Alice")
+    # db.put("city", "Boston")
+    # db.commit()
+    # #db.delete("city")
+
+    # #print(db.pending)
+
+    # #db.rollback()
+    # print(db.get("name"))
+    # print(db.get("city"))
 
     # db.put("name", "Alice")
     # db.put("city", "Boston")
