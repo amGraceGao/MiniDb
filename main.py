@@ -325,50 +325,112 @@ class MiniDB:
 
 
 if __name__ == "__main__":
-    test_path = "transation_test_log"
 
+    test_path = "phase2_test.log"
+
+    # 每次测试从空日志开始
     with open(test_path, "wb"):
         pass
 
     db = MiniDB(test_path)
+
+    # 1. Rollback：内存中的修改应被丢弃
     db.put("name", "Alice")
 
-    # 模拟 transaction operation 已完整写入
-    txid = uuid.uuid4().hex
-    operation = {
-        "op": "put",
-        "txid": txid,
-        "key": "name",
-        "value": "Bob",
-    }
-    commit_marker = {
-        "op": "commit",
-        "txid": txid,
-    }
+    db.begin()
+    db.put("name", "Temporary")
+    assert db.get("name") == "Temporary"
 
-    operation_frame = db._encode_record(operation)
-    commit_frame = db._encode_record(commit_marker)
+    db.rollback()
+    assert db.get("name") == "Alice"
+
+    # 2. Commit：操作在 commit 后生效
+    db.begin()
+    db.put("name", "Bob")
+    db.put("city", "Boston")
+    db.commit()
+
+    assert db.get("name") == "Bob"
+    assert db.get("city") == "Boston"
+
+    # 3. Commit 后删除
+    db.begin()
+    db.delete("city")
+    db.commit()
+
+    assert db.get("city") is None
+
+    # 4. 模拟完整 operation、但不完整 COMMIT
+    unfinished_txid = uuid.uuid4().hex
+
+    unfinished_operation = {
+        "op": "put",
+        "txid": unfinished_txid,
+        "key": "name",
+        "value": "Should not appear",
+    }
+    incomplete_commit = {
+        "op": "commit",
+        "txid": unfinished_txid,
+    }
 
     with open(test_path, "ab") as file:
-        file.write(operation_frame)
+        file.write(db._encode_record(unfinished_operation))
 
-        # COMMIT Frame 只写入前 4 bytes，模拟崩溃
-        file.write(commit_frame[:4])
+        # 只写入 COMMIT Frame 的一部分
+        file.write(db._encode_record(incomplete_commit)[:4])
 
-    # 重启：Bob 的 operation 没有完整 COMMIT，因此不能生效
+    # 5. 模拟重启
     reopened = MiniDB(test_path)
 
-    assert reopened.get("name") == "Alice"
+    assert reopened.get("name") == "Bob"
+    assert reopened.get("city") is None
 
-    # 恢复后仍可提交新的 transaction
-    reopened.begin()
-    reopened.put("name", "Charlie")
-    reopened.commit()
+    print("Phase 2 checks passed!")
+    # test_path = "transation_test_log"
 
-    reopened_again = MiniDB(test_path)
-    assert reopened_again.get("name") == "Charlie"
+    # with open(test_path, "wb"):
+    #     pass
 
-    print("Incomplete-COMMIT recovery checks passed!")
+    # db = MiniDB(test_path)
+    # db.put("name", "Alice")
+
+    # # 模拟 transaction operation 已完整写入
+    # txid = uuid.uuid4().hex
+    # operation = {
+    #     "op": "put",
+    #     "txid": txid,
+    #     "key": "name",
+    #     "value": "Bob",
+    # }
+    # commit_marker = {
+    #     "op": "commit",
+    #     "txid": txid,
+    # }
+
+    # operation_frame = db._encode_record(operation)
+    # commit_frame = db._encode_record(commit_marker)
+
+    # with open(test_path, "ab") as file:
+    #     file.write(operation_frame)
+
+    #     # COMMIT Frame 只写入前 4 bytes，模拟崩溃
+    #     file.write(commit_frame[:4])
+
+    # # 重启：Bob 的 operation 没有完整 COMMIT，因此不能生效
+    # reopened = MiniDB(test_path)
+
+    # assert reopened.get("name") == "Alice"
+
+    # # 恢复后仍可提交新的 transaction
+    # reopened.begin()
+    # reopened.put("name", "Charlie")
+    # reopened.commit()
+
+    # reopened_again = MiniDB(test_path)
+    # assert reopened_again.get("name") == "Charlie"
+
+    # print("Incomplete-COMMIT recovery checks passed!")
     
     # db = MiniDB(test_path)
 
