@@ -329,27 +329,62 @@ if __name__ == "__main__":
 
     db = MiniDB(test_path)
 
+     # 写入一条已提交的数据
+    db = MiniDB(test_path)
+
     db.begin()
     db.put("name", "Alice")
     db.commit()
 
-    # 模拟崩溃前已经写入操作，但还没写 COMMIT
-    unfinished_txid = uuid.uuid4().hex
+    # 构造一条新的 operation Frame，但只写入前 12 bytes
+    # 这包含完整 header 的 8 bytes，加上一小部分 payload
     unfinished_operation = {
         "op": "put",
-        "txid": unfinished_txid,
+        "txid": uuid.uuid4().hex,
         "key": "name",
         "value": "Bob",
     }
+    incomplete_frame = db._encode_record(unfinished_operation)
 
     with open(test_path, "ab") as file:
-        file.write(db._encode_record(unfinished_operation))
+        file.write(incomplete_frame[:12])
 
-    # 模拟重启
+    # 模拟重启；_recover() 应截断不完整 Frame
     reopened = MiniDB(test_path)
 
     assert reopened.get("name") == "Alice"
-    print("Transaction recovery checks passed!")
+
+    # 验证截断后仍可正常提交和恢复
+    reopened.begin()
+    reopened.put("name", "Charlie")
+    reopened.commit()
+
+    reopened_again = MiniDB(test_path)
+    assert reopened_again.get("name") == "Charlie"
+
+    print("Incomplete-frame recovery checks passed!")
+
+    # db.begin()
+    # db.put("name", "Alice")
+    # db.commit()
+
+    # # 模拟崩溃前已经写入操作，但还没写 COMMIT
+    # unfinished_txid = uuid.uuid4().hex
+    # unfinished_operation = {
+    #     "op": "put",
+    #     "txid": unfinished_txid,
+    #     "key": "name",
+    #     "value": "Bob",
+    # }
+
+    # with open(test_path, "ab") as file:
+    #     file.write(db._encode_record(unfinished_operation))
+
+    # # 模拟重启
+    # reopened = MiniDB(test_path)
+
+    # assert reopened.get("name") == "Alice"
+    # print("Transaction recovery checks passed!")
 
     # db.begin()
     # db.put("name", "Alice")
