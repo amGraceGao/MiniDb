@@ -26,3 +26,33 @@ flowchart TD
     Get --> Seek["seek to offset"]
     Seek --> Log
 ```
+
+### Write path
+
+```mermaid
+flowchart LR
+    Client["Client code"] --> DB["MiniDB"]
+    DB --> Tx["Transaction buffer"]
+    Tx --> Commit["Commit"]
+    Commit --> Encoder["Frame encoder"]
+    Encoder --> Log["Append-only log"]
+```
+### Recovery path
+```mermaid
+flowchart LR
+    Log["Append-only log"] --> Recovery["Recovery"]
+    Recovery --> Decoder["Frame decoder"]
+    Decoder --> Replay["Replay committed transactions"]
+    Replay --> Index["In-memory hash index"]
+```
+
+### Read path
+```mermaid
+flowchart LR
+    Client["Client code"] --> DB["MiniDB"]
+    DB --> Index["Hash index"]
+    Index --> Seek["Seek to offset"]
+    Seek --> Log["Log file"]
+    Log --> Frame["Read one frame"]
+    Frame --> Value["Return value"]
+```
