@@ -387,7 +387,7 @@ if __name__ == "__main__":
     assert reopened.get("city") is None
 
     print("Phase 2 checks passed!")
-    # test_path = "transation_test_log"
+    # test_path = "transation_test.log"
 
     # with open(test_path, "wb"):
     #     pass

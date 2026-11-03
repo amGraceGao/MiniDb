@@ -46,7 +46,7 @@ for i in range(COUNT):
 put_seconds = time.perf_counter() - start
 
 print(f"Put time: {put_seconds:.4f} seconds")
-print(f"Put throughputL {throughput(COUNT, put_seconds):.2f} ops/sec")
+print(f"Put throughput {throughput(COUNT, put_seconds):.2f} ops/sec")
 
 #Warm-up: 先读取一次，让 OS page cache 预热
 for i in range(COUNT):
