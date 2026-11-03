@@ -23,6 +23,6 @@ flowchart TD
     Replay --> Index
 
     Index --> Get[Indexed get]
-    Get --> Seek[seek(offset)]
+    Get --> Seek["seek to offset"]
     Seek --> Log
 ```
