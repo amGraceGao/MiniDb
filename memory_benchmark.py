@@ -17,13 +17,13 @@ sizes = [100, 500, 1_000]
 for count in sizes:
     test_path = f"index_memory_{count}.log"
 
-    #Every data use independent empty log
+    # Use a separate empty log for each dataset size.
     with open(test_path, "wb"):
         pass
 
     db = MiniDB(test_path)
 
-    #Use One transaction write batchly to avoid every put operation fsync db.begin() independently
+    # Batch writes in one transaction to avoid an fsync for each put.
     
     db.begin()
 

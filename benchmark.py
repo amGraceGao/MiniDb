@@ -30,14 +30,14 @@ def full_scan_get(db, key):
 
     return result
 
-#every benchmark started with empty log
+# Start each benchmark run with an empty log.
 
 with open(TEST_PATH, "wb"):
     pass
 
 db = MiniDB(TEST_PATH)
 
-#Benchmark: put throughput
+# Benchmark: put throughput
 start = time.perf_counter()
 
 for i in range(COUNT):
@@ -48,11 +48,11 @@ put_seconds = time.perf_counter() - start
 print(f"Put time: {put_seconds:.4f} seconds")
 print(f"Put throughput {throughput(COUNT, put_seconds):.2f} ops/sec")
 
-#Warm-up: 先读取一次，让 OS page cache 预热
+# Warm-up: read each key once to warm the OS page cache.
 for i in range(COUNT):
     db.get(f"user:{i}")
 
-#Benchmark: indexed get throughput
+# Benchmark: indexed get throughput
 start = time.perf_counter()
 
 for i in range(COUNT):

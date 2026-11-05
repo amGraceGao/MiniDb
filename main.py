@@ -42,7 +42,7 @@ class MiniDB:
         written_records = []
 
         with open(self.path, "ab") as file:
-            # 先写入所有操作记录
+            # Write all operation records first.
             for record in self.pending:
                 offset = file.tell()
                 frame = self._encode_record(record)
@@ -54,18 +54,18 @@ class MiniDB:
             # file.flush()
             # os.fsync(file.fileno())
 
-            # 最后才写 COMMIT marker
+            # Append the COMMIT marker after all operation records.
             commit_record = {
                 "op" : "commit",
                 "txid" : self.transaction_id,
             }
             file.write(self._encode_record(commit_record))
 
-            # 只有操作和 COMMIT 都写完，才同步到磁盘
+            # Sync to disk only after writing all operations and the COMMIT marker.
             file.flush()
             os.fsync(file.fileno())
 
-        # fsync 成功后，更新内存 index
+        # Update the in-memory index after fsync succeeds.
         for record, offset in written_records:
             key = record["key"]
 
@@ -222,8 +222,8 @@ class MiniDB:
     def _recover(self):
         self.index.clear()
 
-         # 暂存尚未提交的事务操作：
-        # txid → [(record, offset), ...]
+        # Buffer uncommitted transaction operations:
+        # txid -> [(record, offset), ...]
         pending_transactions = {}
 
         # Replay valid committed records
@@ -246,7 +246,7 @@ class MiniDB:
                 try:
                     result = self._read_frame(file)
                 except EOFError:
-                    # 最后一条 Frame 没写完整：删除它
+                    # Truncate the incomplete frame at the end of the log.
                     file.truncate(offset)
                     file.flush()
                     os.fsync(file.fileno())
@@ -293,7 +293,7 @@ class MiniDB:
                 _, record = result
                 operation = record.get("op")
 
-                # 事务中的 put/delete：先暂存，不能立刻应用
+                # Buffer transactional put/delete operations until a COMMIT marker is found.
                 if operation in ("put", "delete") and "txid" in record:
                     txid = record["txid"]
 
@@ -302,7 +302,7 @@ class MiniDB:
 
                     pending_transactions[txid].append((record, offset))
 
-                # 看到 COMMIT 后，才应用该事务的所有操作
+                # Apply all transaction operations only after reading the COMMIT marker.
                 elif operation == "commit":
                     txid = record["txid"]
 
@@ -314,12 +314,12 @@ class MiniDB:
 
                     del pending_transactions[txid]
 
-                # 兼容之前的 batch 格式
+                # Support the legacy batch format.
                 elif operation == "batch":
                     for item in record["records"]:
                         apply_record(item, offset)
 
-                # 普通的、非事务 put/delete 记录
+                # Apply non-transactional put/delete records directly.
                 else:
                     apply_record(record, offset)
 
@@ -328,13 +328,13 @@ if __name__ == "__main__":
 
     test_path = "phase2_test.log"
 
-    # 每次测试从空日志开始
+    # Start each test run with an empty log.
     with open(test_path, "wb"):
         pass
 
     db = MiniDB(test_path)
 
-    # 1. Rollback：内存中的修改应被丢弃
+    # 1. Rollback: discard buffered changes.
     db.put("name", "Alice")
 
     db.begin()
@@ -344,7 +344,7 @@ if __name__ == "__main__":
     db.rollback()
     assert db.get("name") == "Alice"
 
-    # 2. Commit：操作在 commit 后生效
+    # 2. Commit: persist the buffered operations.
     db.begin()
     db.put("name", "Bob")
     db.put("city", "Boston")
@@ -353,14 +353,14 @@ if __name__ == "__main__":
     assert db.get("name") == "Bob"
     assert db.get("city") == "Boston"
 
-    # 3. Commit 后删除
+    # 3. Commit a deletion.
     db.begin()
     db.delete("city")
     db.commit()
 
     assert db.get("city") is None
 
-    # 4. 模拟完整 operation、但不完整 COMMIT
+    # 4. Simulate a complete operation followed by an incomplete COMMIT frame.
     unfinished_txid = uuid.uuid4().hex
 
     unfinished_operation = {
@@ -377,351 +377,14 @@ if __name__ == "__main__":
     with open(test_path, "ab") as file:
         file.write(db._encode_record(unfinished_operation))
 
-        # 只写入 COMMIT Frame 的一部分
+        # Write only part of the COMMIT frame.
         file.write(db._encode_record(incomplete_commit)[:4])
 
-    # 5. 模拟重启
+    # 5. Simulate a restart.
     reopened = MiniDB(test_path)
 
     assert reopened.get("name") == "Bob"
     assert reopened.get("city") is None
 
     print("Phase 2 checks passed!")
-    # test_path = "transation_test.log"
-
-    # with open(test_path, "wb"):
-    #     pass
-
-    # db = MiniDB(test_path)
-    # db.put("name", "Alice")
-
-    # # 模拟 transaction operation 已完整写入
-    # txid = uuid.uuid4().hex
-    # operation = {
-    #     "op": "put",
-    #     "txid": txid,
-    #     "key": "name",
-    #     "value": "Bob",
-    # }
-    # commit_marker = {
-    #     "op": "commit",
-    #     "txid": txid,
-    # }
-
-    # operation_frame = db._encode_record(operation)
-    # commit_frame = db._encode_record(commit_marker)
-
-    # with open(test_path, "ab") as file:
-    #     file.write(operation_frame)
-
-    #     # COMMIT Frame 只写入前 4 bytes，模拟崩溃
-    #     file.write(commit_frame[:4])
-
-    # # 重启：Bob 的 operation 没有完整 COMMIT，因此不能生效
-    # reopened = MiniDB(test_path)
-
-    # assert reopened.get("name") == "Alice"
-
-    # # 恢复后仍可提交新的 transaction
-    # reopened.begin()
-    # reopened.put("name", "Charlie")
-    # reopened.commit()
-
-    # reopened_again = MiniDB(test_path)
-    # assert reopened_again.get("name") == "Charlie"
-
-    # print("Incomplete-COMMIT recovery checks passed!")
-    
-    # db = MiniDB(test_path)
-
-    #  # 写入一条已提交的数据
-    # db = MiniDB(test_path)
-
-    # # 写入一条正常的 framed record
-    # db = MiniDB(test_path)
-    # db.put("name", "Alice")
-
-    # # Header 是前 8 bytes。
-    # # 从 payload 的第一个 byte 开始，故意修改一个 bit。
-    # with open(test_path, "r+b") as file:
-    #     file.seek(8)
-
-    #     original_byte = file.read(1)
-    #     corrupted_byte = bytes([original_byte[0] ^ 1])
-
-    #     file.seek(8)
-    #     file.write(corrupted_byte)
-
-    #     file.flush()
-    #     os.fsync(file.fileno())
-
-    # # 重启时，checksum 应该发现内容和原记录不一致
-    # try:
-    #     MiniDB(test_path)
-    # except ValueError as error:
-    #     assert str(error) == "Checksum mismatch"
-    #     print("Checksum validation checks passed!")
-    # else:
-    #     raise AssertionError("Expected a checksum mismatch")
-
-
-    # db.begin()
-    # db.put("name", "Alice")
-    # db.commit()
-
-    # # 构造一条新的 operation Frame，但只写入前 12 bytes
-    # # 这包含完整 header 的 8 bytes，加上一小部分 payload
-    # unfinished_operation = {
-    #     "op": "put",
-    #     "txid": uuid.uuid4().hex,
-    #     "key": "name",
-    #     "value": "Bob",
-    # }
-    # incomplete_frame = db._encode_record(unfinished_operation)
-
-    # with open(test_path, "ab") as file:
-    #     file.write(incomplete_frame[:12])
-
-    # # 模拟重启；_recover() 应截断不完整 Frame
-    # reopened = MiniDB(test_path)
-
-    # assert reopened.get("name") == "Alice"
-
-    # # 验证截断后仍可正常提交和恢复
-    # reopened.begin()
-    # reopened.put("name", "Charlie")
-    # reopened.commit()
-
-    # reopened_again = MiniDB(test_path)
-    # assert reopened_again.get("name") == "Charlie"
-
-    # print("Incomplete-frame recovery checks passed!")
-
-    # db.begin()
-    # db.put("name", "Alice")
-    # db.commit()
-
-    # # 模拟崩溃前已经写入操作，但还没写 COMMIT
-    # unfinished_txid = uuid.uuid4().hex
-    # unfinished_operation = {
-    #     "op": "put",
-    #     "txid": unfinished_txid,
-    #     "key": "name",
-    #     "value": "Bob",
-    # }
-
-    # with open(test_path, "ab") as file:
-    #     file.write(db._encode_record(unfinished_operation))
-
-    # # 模拟重启
-    # reopened = MiniDB(test_path)
-
-    # assert reopened.get("name") == "Alice"
-    # print("Transaction recovery checks passed!")
-
-    # db.begin()
-    # db.put("name", "Alice")
-    # db.put("city", "Boston")
-    # db.commit()
-    # #db.delete("city")
-
-    # #print(db.pending)
-
-    # #db.rollback()
-    # print(db.get("name"))
-    # print(db.get("city"))
-
-    # db.put("name", "Alice")
-    # db.put("city", "Boston")
-    # db.delete("city")
-
-    # # 创建新对象，模拟程序重启
-    # reopened = MiniDB(test_path)
-
-    # print(reopened.get("name"))
-    # print(reopened.get("city"))
-
-    # db = MiniDB("framed_recovery_test.log")
-
-    # print(db.transaction_id)  # None
-
-    # db.begin()
-    # print(db.transaction_id)  # 一串随机 ID
-
-    # db.rollback()
-    # print(db.transaction_id)  # None
-
-    # db.put("name", "Alice")
-    # print(db.get("name"))
-
-    # db.delete("name")
-    # print(db.get("name"))
-    # db.put("name", "Alice")
-    # db.put("city", "Boston")
-
-    # print(db.get("name"))
-    # print(db.get("city"))
-    # print(db.get("missing"))
-
-    # print(db.index)
-    # print(os.path.getsize(test_path))
-
-    # with open(test_path, "wb"):
-    #     pass
-
-    # db = MiniDB(test_path)
-
-    # db.put("name", "Alice")
-    # db.put("city", "Beijing")
-
-    # # 模拟只写入了一部分 Batch record
-    # with open(test_path, "ab") as file:
-    #     file.write(
-    #         b'{"op":"batch","records":['
-    #         b'{"key":"name","value":"Bob"},'
-    #     )
-
-    # # 重新打开：半条 Batch 应该被丢弃
-    # db = MiniDB(test_path)
-
-    # assert db.get("name") == "Alice"
-    # assert db.get("city") == "Beijing"
-
-    # # 确认恢复之后，仍能正常提交事务
-    # db.begin()
-    # db.put("name", "Charlie")
-    # db.delete("city")
-    # db.commit()
-
-    # db = MiniDB(test_path)
-
-    # assert db.get("name") == "Charlie"
-    # assert db.get("city") is None
-
-    # print("Transaction recovery checks passed!")
-
-    # db = MiniDB("data.log")
-    # #print(db.path)
-    # #print(db.index)
-
-    # #with open(db.path, "a", encoding="utf-8") as file:
-    # #  file.write("hello\n")
-
-    # #db.put("name", "Alice")
-    # #db.put("name", "Bob")
-    # #db.put("city", "Beijing")
-
-    # db.put("name", "Charlie")
-    # print(db.index)
-    # print(db.get("name"))
-
-    # db.delete("name")
-    # print(db.get("name"))
-
-    # db = MiniDB("data.log")
-    # print(db.get("name"))
-    # print(db.get("missing"))
-
-    # db = MiniDB("data.log")
-
-    # # 重复写入：最新值生效
-    # db.put("user:1", "Alice")
-    # db.put("user:1", "Bob")
-    # assert db.get("user:1") == "Bob"
-
-    # # 删除
-    # db.put("user:2", "Charlie")
-    # db.delete("user:2")
-    # assert db.get("user:2") is None
-
-    # # 重新打开：从日志重建 index
-    # reopened = MiniDB("data.log")
-    # assert reopened.get("user:1") == "Bob"
-    # assert reopened.get("user:2") is None
-
-    # print("All checks passed!")
-
-    # 测试首次启动：运行前确保这个文件不存在
-    # db = MiniDB("recovery_test.log")
-    # assert db.get("name") is None
-
-    # db.put("name", "Alice")
-
-    # # 模拟崩溃留下半条记录
-    # with open("recovery_test.log", "ab") as file:
-    #     file.write(b'{"key": "name", "value": ')
-
-    # # 重新打开，应该保留之前的完整记录
-    # db = MiniDB("recovery_test.log")
-    # assert db.get("name") == "Alice"
-
-    # # 确认清理尾部后，还能正常写入和恢复
-    # db.put("name", "Bob")
-    # db = MiniDB("recovery_test.log")
-    # assert db.get("name") == "Bob"
-
-    # print("Recovery checks passed!")
-    # db = MiniDB("data.log")
-    # db.put("name", "Alice")
-
-    # db.begin()
-
-    # db.delete("name")
-    # print(db.get("name"))
-
-    # db.put("name", "Bob")
-
-    # #db.put("name", "Charlie")
-
-    # print(db.get("name"))
-
-    # db.delete("name")
-    # print(db.get("name"))
-    # print(db.pending)
-
-    # db.rollback()
-    # print(db.get("name"))
-
-    # db = MiniDB("data.log")
-    # db.put("name", "Alice")
-    # db.put("city", "Beijing")
-
-    # db.begin()
-    # db.put("name", "Bob")
-    # db.delete("city")
-    # db.commit()
-
-    # assert db.get("name") == "Bob"
-    # assert db.get("city") is None
-
-    # # 验证重新打开后，提交结果仍然存在
-    # reopened = MiniDB("data.log")
-    # assert reopened.get("name") == "Bob"
-    # assert reopened.get("city") is None
-
-    # print("Commit checks passed!")
-
-    # 使用独立的测试文件，每次测试都从空文件开始
-    # db = MiniDB("data.log")
-
-    # record = {"key": "name", "value": "Alice"}
-    # frame = db._encode_record(record)
-
-    # print("Header:", frame[:8])
-    # print("Payload:", frame[8:].decode("utf-8"))
-    # print("Total bytes:", len(frame))
-
-    # db = MiniDB("data.log")
-
-    # record = {"key": "name", "value": "Alice"}
-    # frame = db._encode_record(record)
-
-    # with open("frame_test.log", "wb") as file:
-    #     file.write(frame)
-
-    # with open("frame_test.log", "rb") as file:
-    #     offset, decoded = db._read_frame(file)
-
-    #     print(offset)
-    #     print(decoded)
-    #     print(db._read_frame(file))
+   
